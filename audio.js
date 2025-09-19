@@ -115,20 +115,43 @@ export function startGateLongCreak(volume=0.6){
 }
 
 export function stopGateLongCreak(fadeOut=1.2){ 
-  // Immediate stop for gate audio
+  // More aggressive immediate stop for gate audio
   if (gateLongHandle && !gateLongHandle.stopped) {
     try {
+      // Immediately mute to 0 volume
       gateLongHandle.gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+      gateLongHandle.gainNode.gain.value = 0;
       gateLongHandle.gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      
+      // Force stop the source
       gateLongHandle.source.stop();
       gateLongHandle.stopped = true;
     } catch(e) {
       console.error('Error stopping gate audio:', e);
+      // Even if there's an error, force mark as stopped
+      gateLongHandle.stopped = true;
     }
   }
   
-  // Also stop via tag system as backup
-  stopAudioByTag('gate-long', true);
+  // Also aggressively stop via tag system as backup
+  const set = audioRegistry.get('gate-long');
+  if (set) {
+    set.forEach(handle => {
+      if (!handle.stopped) {
+        try {
+          handle.gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+          handle.gainNode.gain.value = 0;
+          handle.gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+          handle.source.stop();
+          handle.stopped = true;
+        } catch(e) {
+          handle.stopped = true;
+        }
+      }
+    });
+    audioRegistry.delete('gate-long');
+  }
+  
   gateLongHandle = null;
 }
 
