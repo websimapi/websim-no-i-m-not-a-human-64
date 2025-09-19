@@ -1,3 +1,5 @@
+
+```javascript
 const AUDIO_DURATION = 95, FADE = 15, FADE_OUT_START = 80;
 export const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 let audioUnlocked = false;
@@ -8,6 +10,7 @@ let knockTimeoutId = null, knockingActive = false;
 async function loadSound(url){
   try { const r=await fetch(url); const b=await r.arrayBuffer(); return await audioCtx.decodeAudioData(b); } catch(e){ console.error('Failed sound', url, e); return null; }
 }
+
 export async function loadAllSounds(){
   const urls = ['knock.mp3','knock_2.mp3','knock_3.mp3','knock_4.mp3'];
   knockBuffers = (await Promise.all(urls.map(loadSound))).filter(Boolean);
@@ -18,9 +21,11 @@ export async function loadAllSounds(){
   gateThudBuffer = await loadSound('knock_4.mp3');
   gateStuckBuffer = await loadSound('gate_creak.mp3');
 }
+
 export async function unlockAudio(){
   if (audioUnlocked) return; if (audioCtx.state === 'suspended') await audioCtx.resume(); audioUnlocked = true;
 }
+
 export function setupBackgroundAudio(){
   if (backgroundAudioElement) return;
   const audio = new Audio('Fleshy Decay - Sonauto.ai.ogg'); backgroundAudioElement = audio; audio.loop=false; audio.preload='auto';
@@ -29,7 +34,11 @@ export function setupBackgroundAudio(){
   audio.addEventListener('timeupdate', apply); audio.addEventListener('seeked', apply); audio.addEventListener('ended', ()=>{ audio.currentTime=0; audio.play(); });
   audio.play().catch(e=>console.error('BG play failed', e));
 }
-export function playSound(buffer, volume=1.0, onEnded=null, loop=false, fadeInDuration=0, playbackRate=1){
+
+// registry for tagged audio handles
+const audioRegistry = new Map();
+
+export function playSound(buffer, volume=1.0, onEnded=null, loop=false, fadeInDuration=0, playbackRate=1, tag){
   if (!audioUnlocked || !buffer) return null;
   try {
     const source = audioCtx.createBufferSource(); source.buffer = buffer; source.loop = loop;
@@ -37,31 +46,40 @@ export function playSound(buffer, volume=1.0, onEnded=null, loop=false, fadeInDu
     const gainNode = audioCtx.createGain(); if (fadeInDuration>0){ gainNode.gain.setValueAtTime(0, audioCtx.currentTime); gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + fadeInDuration); } else { gainNode.gain.value = volume; }
     source.connect(gainNode); gainNode.connect(audioCtx.destination); source.start(0);
     if (onEnded && !loop) source.addEventListener('ended', onEnded, { once:true });
-    return { source, gainNode };
+    const handle = { source, gainNode };
+    if (tag) {
+      if (!audioRegistry.has(tag)) audioRegistry.set(tag, new Set());
+      audioRegistry.get(tag).add(handle);
+      source.addEventListener('ended', ()=>{ try{ audioRegistry.get(tag)?.delete(handle); }catch{} }, { once:true });
+    }
+    return handle;
   } catch(e){ console.error('Could not play sound', e); return null; }
 }
+
 export function scheduleNextKnock(){
   knockingActive = true; const randomInterval = Math.random()*(10000-3000)+3000;
   knockTimeoutId = setTimeout(()=>{ if(!knockingActive) return; if(knockBuffers.length){ playSound(knockBuffers[Math.floor(Math.random()*knockBuffers.length)]); } scheduleNextKnock(); }, randomInterval);
 }
+
 export function stopKnocks(){ knockingActive=false; if(knockTimeoutId){ clearTimeout(knockTimeoutId); knockTimeoutId=null; } }
+
 export function playPrimaryKnock(){ if(primaryKnockBuffer) playSound(primaryKnockBuffer, 1.0); }
+
 export function playGateCreak(volume=0.7){ if(gateCreakBuffer) playSound(gateCreakBuffer, volume); }
+
 export function playGateThud(volume=0.9, rate=0.85){ if(gateThudBuffer) playSound(gateThudBuffer, volume, null, false, 0, rate); }
+
 export function playGateStuck(volume=0.7, rate=Math.random()*0.15+0.9){ if(gateStuckBuffer) playSound(gateStuckBuffer, volume, null, false, 0, rate); }
 
-/* add long creak controller */
 let gateLongHandle = null;
+
 export function startGateLongCreak(volume=0.6){
   if(!audioUnlocked || gateLongHandle || !gateCreakBuffer) return;
-  gateLongHandle = playSound(gateCreakBuffer, volume, null, true, 1.2);
+  gateLongHandle = playSound(gateCreakBuffer, volume, null, true, 1.2, 1, 'gate-long');
 }
-export function stopGateLongCreak(fadeOut=1.2){
-  const h=gateLongHandle; if(!h) return; gateLongHandle=null;
-  try{ h.gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-    h.gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime+fadeOut);
-    setTimeout(()=>{ try{ h.source.stop(); }catch{} }, fadeOut*1000);
-  }catch{}
+
+export function stopGateLongCreak(fadeOut=1.2){ 
+  stopAudioByTag('gate-long', fadeOut<=0); gateLongHandle=null;
 }
 
 export function playGateFrameClank(intensity=1){
@@ -89,4 +107,19 @@ export function playGateFrameClank(intensity=1){
 }
 
 export function getUIBuffers(){ return { uiHoverBuffer, tvStaticLoopBuffer }; }
+
 export function getBackgroundAudio(){ return backgroundAudioElement; }
+
+// stop any tagged audio immediately or with short fade
+export function stopAudioByTag(tag, immediate=true){
+  const set = audioRegistry.get(tag); if(!set || set.size===0) return;
+  const now = audioCtx.currentTime;
+  set.forEach(h=>{
+    try{
+      h.gainNode.gain.cancelScheduledValues(now);
+      if (immediate) { h.gainNode.gain.setValueAtTime(0, now); h.source.stop(0); }
+      else { h.gainNode.gain.linearRampToValueAtTime(0, now+0.15); setTimeout(()=>{ try{ h.source.stop(); }catch{} }, 160); }
+    }catch{}
+  });
+  audioRegistry.delete(tag);
+}

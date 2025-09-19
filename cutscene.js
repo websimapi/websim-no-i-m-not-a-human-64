@@ -1,5 +1,5 @@
 import { applyPosterizeToImage } from './posterize.js';
-import { audioCtx, getBackgroundAudio, playGateCreak, startGateLongCreak, stopGateLongCreak, playGateThud, playGateStuck, playGateFrameClank } from './audio.js';
+import { audioCtx, getBackgroundAudio, playGateCreak, startGateLongCreak, stopGateLongCreak, playGateThud, playGateStuck, playGateFrameClank, stopAudioByTag } from './audio.js';
 import { animateBirds, stopBirds } from './birds.js';
 import { parseGIF, decompressFrames } from 'https://esm.sh/gifuct-js@2.0.0';
 import { initScene3D, stopScene3D } from './scene3d.js';
@@ -170,12 +170,7 @@ async function transitionToScene(sceneIndex) {
       if (idx < maxFrames && idx < sceneAssets.frames.length) {
         posterizeInstance.setImage(sceneAssets.frames[idx]);
         playGateFrameClank(1.0);
-        
-        // Stop audio when gate reaches fully open position (frame 2)
-        if (idx === 2) {
-          stopGateLongCreak(0); // Immediate stop when gate is fully open
-        }
-        
+        if (idx === 2) { stopAudioByTag('gate-long', true); } // hard stop on fully open
         const delay = sceneAssets.delays[idx] || 100;
         slideshowTimer = setTimeout(playFrame, delay);
       } else {
