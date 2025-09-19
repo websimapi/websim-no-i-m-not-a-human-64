@@ -33,25 +33,62 @@ export function setupBackgroundAudio(){
   audio.play().catch(e=>console.error('BG play failed', e));
 }
 
-// registry for tagged audio handles
+// Enhanced audio registry with better tracking
 const audioRegistry = new Map();
+let gateLongHandle = null;
 
 export function playSound(buffer, volume=1.0, onEnded=null, loop=false, fadeInDuration=0, playbackRate=1, tag){
   if (!audioUnlocked || !buffer) return null;
   try {
-    const source = audioCtx.createBufferSource(); source.buffer = buffer; source.loop = loop;
+    const source = audioCtx.createBufferSource(); 
+    source.buffer = buffer; 
+    source.loop = loop;
     source.playbackRate.value = playbackRate;
-    const gainNode = audioCtx.createGain(); if (fadeInDuration>0){ gainNode.gain.setValueAtTime(0, audioCtx.currentTime); gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + fadeInDuration); } else { gainNode.gain.value = volume; }
-    source.connect(gainNode); gainNode.connect(audioCtx.destination); source.start(0);
+    
+    const gainNode = audioCtx.createGain(); 
+    if (fadeInDuration>0){ 
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime); 
+      gainNode.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + fadeInDuration); 
+    } else { 
+      gainNode.gain.value = volume; 
+    }
+    
+    source.connect(gainNode); 
+    gainNode.connect(audioCtx.destination); 
+    source.start(0);
+    
+    const handle = { source, gainNode, stopped: false };
+    
+    // Enhanced cleanup on ended
+    const cleanup = () => {
+      handle.stopped = true;
+      if (tag) {
+        try {
+          const set = audioRegistry.get(tag);
+          if (set) {
+            set.delete(handle);
+            if (set.size === 0) audioRegistry.delete(tag);
+          }
+        } catch(e) {}
+      }
+      if (tag === 'gate-long' && gateLongHandle === handle) {
+        gateLongHandle = null;
+      }
+    };
+    
     if (onEnded && !loop) source.addEventListener('ended', onEnded, { once:true });
-    const handle = { source, gainNode };
+    source.addEventListener('ended', cleanup, { once:true });
+    
     if (tag) {
       if (!audioRegistry.has(tag)) audioRegistry.set(tag, new Set());
       audioRegistry.get(tag).add(handle);
-      source.addEventListener('ended', ()=>{ try{ audioRegistry.get(tag)?.delete(handle); }catch{} }, { once:true });
     }
+    
     return handle;
-  } catch(e){ console.error('Could not play sound', e); return null; }
+  } catch(e){ 
+    console.error('Could not play sound', e); 
+    return null; 
+  }
 }
 
 export function scheduleNextKnock(){
@@ -69,15 +106,30 @@ export function playGateThud(volume=0.9, rate=0.85){ if(gateThudBuffer) playSoun
 
 export function playGateStuck(volume=0.7, rate=Math.random()*0.15+0.9){ if(gateStuckBuffer) playSound(gateStuckBuffer, volume, null, false, 0, rate); }
 
-let gateLongHandle = null;
-
 export function startGateLongCreak(volume=0.6){
-  if(!audioUnlocked || gateLongHandle || !gateCreakBuffer) return;
+  // Stop any existing gate audio first
+  stopGateLongCreak(0);
+  
+  if(!audioUnlocked || !gateCreakBuffer) return;
   gateLongHandle = playSound(gateCreakBuffer, volume, null, true, 1.2, 1, 'gate-long');
 }
 
 export function stopGateLongCreak(fadeOut=1.2){ 
-  stopAudioByTag('gate-long', fadeOut<=0); gateLongHandle=null;
+  // Immediate stop for gate audio
+  if (gateLongHandle && !gateLongHandle.stopped) {
+    try {
+      gateLongHandle.gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+      gateLongHandle.gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gateLongHandle.source.stop();
+      gateLongHandle.stopped = true;
+    } catch(e) {
+      console.error('Error stopping gate audio:', e);
+    }
+  }
+  
+  // Also stop via tag system as backup
+  stopAudioByTag('gate-long', true);
+  gateLongHandle = null;
 }
 
 export function playGateFrameClank(intensity=1){
@@ -108,16 +160,44 @@ export function getUIBuffers(){ return { uiHoverBuffer, tvStaticLoopBuffer }; }
 
 export function getBackgroundAudio(){ return backgroundAudioElement; }
 
-// stop any tagged audio immediately or with short fade
+// Enhanced stop function with better error handling
 export function stopAudioByTag(tag, immediate=true){
-  const set = audioRegistry.get(tag); if(!set || set.size===0) return;
+  const set = audioRegistry.get(tag); 
+  if(!set || set.size===0) return;
+  
   const now = audioCtx.currentTime;
-  set.forEach(h=>{
-    try{
-      h.gainNode.gain.cancelScheduledValues(now);
-      if (immediate) { h.gainNode.gain.setValueAtTime(0, now); h.source.stop(0); }
-      else { h.gainNode.gain.linearRampToValueAtTime(0, now+0.15); setTimeout(()=>{ try{ h.source.stop(); }catch{} }, 160); }
-    }catch{}
+  const handleArray = Array.from(set); // Convert to array to avoid iteration issues
+  
+  handleArray.forEach(handle => {
+    if (handle.stopped) return; // Skip already stopped audio
+    
+    try {
+      handle.gainNode.gain.cancelScheduledValues(now);
+      if (immediate) { 
+        handle.gainNode.gain.setValueAtTime(0, now); 
+        handle.source.stop();
+        handle.stopped = true;
+      } else { 
+        handle.gainNode.gain.linearRampToValueAtTime(0, now + 0.15); 
+        setTimeout(() => { 
+          try { 
+            if (!handle.stopped) {
+              handle.source.stop(); 
+              handle.stopped = true;
+            }
+          } catch(e) {} 
+        }, 160); 
+      }
+    } catch(e) {
+      console.error('Error stopping tagged audio:', e);
+    }
   });
+  
+  // Clear the registry
   audioRegistry.delete(tag);
+  
+  // Clear gateLongHandle if it was the gate audio
+  if (tag === 'gate-long') {
+    gateLongHandle = null;
+  }
 }
