@@ -170,11 +170,16 @@ async function transitionToScene(sceneIndex) {
       if (idx < maxFrames && idx < sceneAssets.frames.length) {
         posterizeInstance.setImage(sceneAssets.frames[idx]);
         playGateFrameClank(1.0);
+        
+        // Stop audio when gate reaches fully open position (frame 2)
+        if (idx === 2) {
+          stopGateLongCreak(0); // Immediate stop when gate is fully open
+        }
+        
         const delay = sceneAssets.delays[idx] || 100;
         slideshowTimer = setTimeout(playFrame, delay);
       } else {
-        // We've reached the last frame, stop audio immediately.
-        stopGateLongCreak(0); // Immediate stop when gate finishes opening
+        // We've reached the last frame
         if (autoSkipTimeout) clearTimeout(autoSkipTimeout); // also cancel the scene skip timeout
         if (gateFrameClickHandler) { csElement.removeEventListener('click', gateFrameClickHandler); gateFrameClickHandler = null; }
         
